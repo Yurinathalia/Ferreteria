@@ -1,59 +1,90 @@
 package com.example.demo.service;
 
-import java.util.ArrayList;
 import java.util.List;
+import java.util.stream.Collectors;
 
 import org.springframework.stereotype.Service;
+import org.springframework.web.server.ResponseStatusException;
+import org.springframework.http.HttpStatus;
 
+import com.example.demo.dto.CompraRequestDTO;
+import com.example.demo.dto.CompraResponseDTO;
+import com.example.demo.dto.ProductoRequestDTO;
+import com.example.demo.dto.ProductoResponseDTO;
 import com.example.demo.entity.Producto;
+import com.example.demo.repository.ProductoRepository;
 
 @Service
 public class ProductoService {
-    
-private List<Producto> productos = new ArrayList<>();
-    private int ultimoId = 0;
 
-    public ProductoService() {
-        // Datos iniciales
-        productos.add(new Producto(++ultimoId, "Martillo", 15000, 10));
-        productos.add(new Producto(++ultimoId, "Tornillo", 5000, 20));
-        productos.add(new Producto(++ultimoId, "Tuerca", 5000, 15));
-        productos.add(new Producto(++ultimoId, "Destornillador", 20000, 5));
-        productos.add(new Producto(++ultimoId, "Taladro", 100000, 50));
+    private final ProductoRepository productoRepository;
+
+    public ProductoService(ProductoRepository productoRepository) {
+        this.productoRepository = productoRepository;
     }
 
-    // Obtener todos
-    public List<Producto> obtenerProductos() {
-        return productos;
+    public List<ProductoResponseDTO> obtenerProductos() {
+        return productoRepository.findAll().stream().map(this::toResponse).collect(Collectors.toList());
     }
 
-    // Agregar
-    public Producto agregarProducto(Producto producto) {
-        producto = new Producto(++ultimoId,
-                producto.getNombre(),
-                producto.getPrecio(),
-                producto.getStock());
-
-        productos.add(producto);
-        return producto;
+    public ProductoResponseDTO agregarProducto(ProductoRequestDTO request) {
+        Producto saved = productoRepository.save(new Producto(0, request.getNombre(), request.getPrecio(), request.getStock()));
+        return toResponse(saved);
     }
 
-    // Editar
-    public Producto editarProducto(int id, Producto nuevo) {
-        for (Producto p : productos) {
-            if (p.getId() == id) {
-                p.setNombre(nuevo.getNombre());
-                p.setPrecio(nuevo.getPrecio());
-                p.setStock(nuevo.getStock());
-                return p;
-            }
-        }
-        return null;
+    public ProductoResponseDTO editarProducto(int id, ProductoRequestDTO nuevo) {
+        Producto existente = productoRepository.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Producto no encontrado: id=" + id));
+
+        existente.setNombre(nuevo.getNombre());
+        existente.setPrecio(nuevo.getPrecio());
+        existente.setStock(nuevo.getStock());
+
+        return toResponse(productoRepository.save(existente));
     }
 
-    // Eliminar
     public boolean eliminarProducto(int id) {
-        return productos.removeIf(p -> p.getId() == id);
+        boolean eliminado = productoRepository.deleteById(id);
+        if (!eliminado) {
+            throw new ResponseStatusException(HttpStatus.NOT_FOUND, "Producto no encontrado: id=" + id);
+        }
+        return true;
+    }
+
+    /**
+     * Compra: descuenta el inventario y si el stock queda en 0, el producto se elimina del catálogo.
+     */
+    public CompraResponseDTO comprarProducto(int id, CompraRequestDTO request) {
+        Producto existente = productoRepository.findById(id)
+                .orElseThrow(() -> new ResponseStatusException(HttpStatus.NOT_FOUND, "Producto no encontrado: id=" + id));
+
+        int cantidad = request.getCantidad();
+        if (cantidad <= 0) {
+            throw new ResponseStatusException(HttpStatus.BAD_REQUEST, "Cantidad inválida");
+        }
+
+        int stockActual = existente.getStock();
+        if (cantidad > stockActual) {
+            throw new ResponseStatusException(HttpStatus.CONFLICT,
+                    "Stock insuficiente. stockActual=" + stockActual + ", cantidad=" + cantidad);
+        }
+
+        int nuevoStock = stockActual - cantidad;
+        existente.setStock(nuevoStock);
+
+        boolean eliminadoDelInventario = false;
+        if (nuevoStock <= 0) {
+            productoRepository.deleteById(id);
+            eliminadoDelInventario = true;
+        } else {
+            productoRepository.save(existente);
+        }
+
+        return new CompraResponseDTO(toResponse(existente), cantidad, eliminadoDelInventario);
+    }
+
+    private ProductoResponseDTO toResponse(Producto producto) {
+        return new ProductoResponseDTO(producto.getId(), producto.getNombre(), producto.getPrecio(), producto.getStock());
     }
 
 }
